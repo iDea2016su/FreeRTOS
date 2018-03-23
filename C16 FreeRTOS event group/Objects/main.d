@@ -53,3 +53,4 @@
 .\objects\main.o: .\Appinc\mem.h
 .\objects\main.o: .\FreeRTOS\include\semphr.h
 .\objects\main.o: .\FreeRTOS\include\timers.h
+.\objects\main.o: .\FreeRTOS\include\event_groups.h

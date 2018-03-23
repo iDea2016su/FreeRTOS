@@ -12,24 +12,35 @@
 #include "task.h"
 #include "semphr.h"
 #include "timers.h"
+#include "event_groups.h"
 
-#define START_TASK_PRIO    1          //任务优先级
-#define START_STK_SIZE     256        //任务堆栈大小
-TaskHandle_t StartTaskHanhler;        //任务句柄
-void StartTask(void *pvParameters);   //任务函数
+#define START_TASK_PRIO    1                  //任务优先级
+#define START_STK_SIZE     256                //任务堆栈大小
+TaskHandle_t StartTaskHanhler;                //任务句柄
+void StartTask(void *pvParameters);           //任务函数
 
-#define TimerControlTask_TASK_PRIO    2        //任务优先级
-#define TimerControlTask_STK_SIZE     256      //任务堆栈大小
-TaskHandle_t TimerControlTaskHanhler;          //任务句柄
-void TimerControlTask(void *pArg);             //任务函数
+#define EventSetBitTask_TASK_PRIO    2        //任务优先级
+#define EventSetBitTask_STK_SIZE     256      //任务堆栈大小
+TaskHandle_t EventSetBitTaskHanhler;          //任务句柄
+void EventSetBitTask(void *pArg);             //任务函数
 
+#define EventGroupTask_TASK_PRIO    3        //任务优先级
+#define EventGroupTask_STK_SIZE     256      //任务堆栈大小
+TaskHandle_t EventGroupTaskHanhler;          //任务句柄
+void EventGroupTask(void *pArg);             //任务函数
 
-TimerHandle_t AutoReloadTimerHandle;      //周期定时器句柄
-TimerHandle_t OneShotTimerHandle;         //单次定时器句柄
+#define EventQueryTask_TASK_PRIO    4        //任务优先级
+#define EventQueryTask_STK_SIZE     256      //任务堆栈大小
+TaskHandle_t EventQueryTaskHanhler;          //任务句柄
+void EventQueryTask(void *pArg);             //任务函数
 
-void AutoReloadCallback(TimerHandle_t xTimer);
-void OneShotCallback(TimerHandle_t xtimer);
+EventGroupHandle_t EventGroupHandler;        //事件标志组句柄
 
+#define EVENTBIT_0   (1<<0)                  //事件位，1左移0位
+#define EVENTBIT_1   (1<<1)
+#define EVENTBIT_2   (1<<2)
+
+#define EVENTBIT_ALL (EVENTBIT_0|EVENTBIT_1|EVENTBIT_2)
 
 int main()
 {
@@ -37,9 +48,8 @@ int main()
 	delay_init();
 	uart_init(115200);
 	LED_Init();
-	//TIM5_Int_Init(5000,7200-1);
-	KEY_Init();	 
-	//EXTIX_Init();
+	KEY_Init();	
+  EXTIX_Init();	
 	printf("hello world\r\n");
 	xTaskCreate( (TaskFunction_t) StartTask,       //任务函数
 							 (const char*   ) "StartTask",     //任务名称
@@ -57,25 +67,28 @@ void StartTask(void * pvParameter)
 {
 	taskENTER_CRITICAL();     //进入临界区
  
-  //创建软件周期定时器，周期定时器，周期1s(1000个时钟节拍)，周期模式
-	AutoReloadTimerHandle = xTimerCreate((const char *)"AutoReloadTimer",
-																			 (TickType_t  )1000,
-																			 (UBaseType_t )pdTRUE,
-																			 (void *      )1,
-																			 (TimerCallbackFunction_t)AutoReloadCallback
-	                                     );
-	OneShotTimerHandle = xTimerCreate((const char *  )"OneShotTimer",
-																		(TickType_t    )2000,
-																		(UBaseType_t   )pdFALSE,
-																	  (void *        )2,
-																		(TimerCallbackFunction_t)OneShotCallback
-																		);
-	xTaskCreate((TaskFunction_t) TimerControlTask,       //任务函数
-							(const char*   ) "HigTask",     //任务名称
-							(uint16_t      ) TimerControlTask_STK_SIZE,  //任务堆栈大小
-							(void *        ) NULL,            //传递给任务函数的参数
-							(UBaseType_t   ) TimerControlTask_TASK_PRIO, //任务优先级
-							(TaskHandle_t* ) &TimerControlTaskHanhler//任务句柄
+	EventGroupHandler = xEventGroupCreate();
+	
+	xTaskCreate((TaskFunction_t) EventSetBitTask,            //任务函数
+							(const char*   ) "EventSetBitTask",          //任务名称
+							(uint16_t      ) EventSetBitTask_STK_SIZE,   //任务堆栈大小
+							(void *        ) NULL,                       //传递给任务函数的参数
+							(UBaseType_t   ) EventSetBitTask_TASK_PRIO,  //任务优先级
+							(TaskHandle_t* ) &EventSetBitTaskHanhler     //任务句柄
+							);
+	xTaskCreate((TaskFunction_t) EventGroupTask,            //任务函数
+							(const char*   ) "EventGroupTask",          //任务名称
+							(uint16_t      ) EventGroupTask_STK_SIZE,   //任务堆栈大小
+							(void *        ) NULL,                      //传递给任务函数的参数
+							(UBaseType_t   ) EventGroupTask_TASK_PRIO,  //任务优先级
+							(TaskHandle_t* ) &EventGroupTaskHanhler     //任务句柄
+							);
+	xTaskCreate((TaskFunction_t) EventQueryTask,            //任务函数
+							(const char*   ) "EventQueryTask",          //任务名称
+							(uint16_t      ) EventQueryTask_STK_SIZE,   //任务堆栈大小
+							(void *        ) NULL,                      //传递给任务函数的参数
+							(UBaseType_t   ) EventQueryTask_TASK_PRIO,  //任务优先级
+							(TaskHandle_t* ) &EventQueryTaskHanhler     //任务句柄
 							);
 		//删除开始任务
 		vTaskDelete(StartTaskHanhler);
@@ -83,40 +96,78 @@ void StartTask(void * pvParameter)
 	  taskEXIT_CRITICAL();      //退出临界区
 }
 
-void TimerControlTask(void *pArg)
+void EventSetBitTask(void * pAgr)
 {
-	  u8 key, num;
-	  while(1)
+	u8 key;
+	while(1)
+	{
+		if(EventGroupHandler != NULL)
 		{
-			//只有两个定时器都创建成功了才能对其进行操作
-			if((AutoReloadTimerHandle!=NULL)&&(OneShotTimerHandle!=NULL))
+			key = KEY_Scan(0);
+			switch(key)
 			{
-				key = KEY_Scan(0);
-				switch(key)
-				{
-					case KEY0_PRES:
-						xTimerStart(AutoReloadTimerHandle,0);
-					  printf("Start peri Timer\r\n");
-					  break;
-					case KEY1_PRES:
-						xTimerStart(OneShotTimerHandle,0);
-					  printf("Start one Timer\r\n");
-					  break;
-					case KEY2_PRES:
-						xTimerStop(AutoReloadTimerHandle,0);
-					  xTimerStop(OneShotTimerHandle,0);
-					  printf("Stop All timers\r\n");
-					  break;
-				}
+				case KEY1_PRES:
+					xEventGroupSetBits(EventGroupHandler,EVENTBIT_1);
+				  break;
+			  case KEY2_PRES:
+					xEventGroupSetBits(EventGroupHandler,EVENTBIT_2);
+				  break;
 			}
+		}
+		vTaskDelay(10);  
+	}
+}
+
+void EventGroupTask(void * pAgr)
+{
+	u8 num;
+	EventBits_t EventValue;
+	while(1)
+	{
+		if(EventGroupHandler != NULL)
+		{
+			//等待事件组中的相应事件位
+			EventValue = xEventGroupWaitBits((EventGroupHandle_t )EventGroupHandler,
+																			 (EventBits_t        )EVENTBIT_ALL,
+																			 (BaseType_t         )pdTRUE,
+																			 (BaseType_t         )pdTRUE,
+																			 (TickType_t         )portMAX_DELAY
+			                                );
+			printf("the event value %d\r\n",EventValue);
+			printf("Get All bits\r\n");
 			num++;
-			if(num==50) 
-			{
-				num = 0;
-				LED0 = !LED0;
-			}
+			LED1 = !LED1;
+		}
+		else
+		{
 			vTaskDelay(10);
 		}
+	}
+}
+
+void EventQueryTask(void * pAgr)
+{
+	u8 num = 0;
+	EventBits_t NewValue,LastValue;
+	while(1)
+	{
+		if(EventGroupTaskHanhler != NULL)
+		{
+			NewValue = xEventGroupGetBits(EventGroupHandler);   //获取事件组的值
+			if(NewValue != LastValue)
+			{
+				LastValue = NewValue;
+				printf("Update the event value %d\r\n",NewValue);
+			}
+		}
+		num ++;
+		if(num>=50)
+		{
+			num = 0;
+			LED0 =! LED0;
+		}
+		vTaskDelay(50);
+	}
 }
 void USART1_IRQHandler(void)                	 
 {
@@ -154,18 +205,17 @@ void USART1_IRQHandler(void)
 //		}
 } 
 
-void AutoReloadCallback(TimerHandle_t xTimer)
+void EXTI4_IRQHandler(void)
 {
-	static u8 timer1Num = 0;
-	timer1Num ++;
-	printf("Timer peri run %d times\r\n",timer1Num);
-	vTaskDelay(2000);
-}
-
-void OneShotCallback(TimerHandle_t xTimer)
-{
-	static u8 timer2Num = 0;
-	timer2Num ++;
-	LED1 = !LED1;
-	printf("Timer once stops in %d times\r\n",timer2Num);
+	BaseType_t Result,xHigherPriorityTaskWoken;
+	delay_xms(50);
+	if(KEY3 == 0)
+	{
+		Result = xEventGroupSetBitsFromISR(EventGroupHandler,EVENTBIT_0,&xHigherPriorityTaskWoken);
+		if(Result != pdFAIL)
+		{
+			portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+		}
+	}
+	EXTI_ClearITPendingBit(EXTI_Line4);
 }
