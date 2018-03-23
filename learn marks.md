@@ -1,3 +1,3 @@
-# FreeRTOS 学习笔记#
+# FreeRTOS 学习笔记
 
 marks
