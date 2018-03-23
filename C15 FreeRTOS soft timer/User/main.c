@@ -11,30 +11,24 @@
 #include "mem.h"
 #include "task.h"
 #include "semphr.h"
+#include "timers.h"
 
 #define START_TASK_PRIO    1          //任务优先级
 #define START_STK_SIZE     256        //任务堆栈大小
 TaskHandle_t StartTaskHanhler;        //任务句柄
 void StartTask(void *pvParameters);   //任务函数
 
-#define LowTask_TASK_PRIO    2        //任务优先级
-#define LowTask_STK_SIZE     256      //任务堆栈大小
-TaskHandle_t LowTaskHanhler;          //任务句柄
-void LowTask(void *pArg);             //任务函数
+#define TimerControlTask_TASK_PRIO    2        //任务优先级
+#define TimerControlTask_STK_SIZE     256      //任务堆栈大小
+TaskHandle_t TimerControlTaskHanhler;          //任务句柄
+void TimerControlTask(void *pArg);             //任务函数
 
 
-#define MidTask_TASK_PRIO    3        //任务优先级
-#define MidTask_STK_SIZE     256      //任务堆栈大小
-TaskHandle_t MidTaskHanhler;          //任务句柄
-void MidTask(void *pArg);             //任务函数
+TimerHandle_t AutoReloadTimerHandle;      //周期定时器句柄
+TimerHandle_t OneShotTimerHandle;         //单次定时器句柄
 
-#define HigTask_TASK_PRIO    4        //任务优先级
-#define HigTask_STK_SIZE     256      //任务堆栈大小
-TaskHandle_t HigTaskHanhler;          //任务句柄
-void HigTask(void *pArg);             //任务函数
-
-
-SemaphoreHandle_t BinarySemaphore;  //二值信号量
+void AutoReloadCallback(TimerHandle_t xTimer);
+void OneShotCallback(TimerHandle_t xtimer);
 
 
 int main()
@@ -63,38 +57,25 @@ void StartTask(void * pvParameter)
 {
 	taskENTER_CRITICAL();     //进入临界区
  
-	//创建二值信号量
-	
-	BinarySemaphore = xSemaphoreCreateBinary();
-	
-	//创建二值信号量成功以后先要释放一下
-	
-	if(BinarySemaphore != NULL)
-	{
-	  xSemaphoreGive(BinarySemaphore);
-	}
-	//创建LED0任务
-	
-	xTaskCreate((TaskFunction_t) HigTask,       //任务函数
+  //创建软件周期定时器，周期定时器，周期1s(1000个时钟节拍)，周期模式
+	AutoReloadTimerHandle = xTimerCreate((const char *)"AutoReloadTimer",
+																			 (TickType_t  )1000,
+																			 (UBaseType_t )pdTRUE,
+																			 (void *      )1,
+																			 (TimerCallbackFunction_t)AutoReloadCallback
+	                                     );
+	OneShotTimerHandle = xTimerCreate((const char *  )"OneShotTimer",
+																		(TickType_t    )2000,
+																		(UBaseType_t   )pdFALSE,
+																	  (void *        )2,
+																		(TimerCallbackFunction_t)OneShotCallback
+																		);
+	xTaskCreate((TaskFunction_t) TimerControlTask,       //任务函数
 							(const char*   ) "HigTask",     //任务名称
-							(uint16_t      ) HigTask_STK_SIZE,  //任务堆栈大小
+							(uint16_t      ) TimerControlTask_STK_SIZE,  //任务堆栈大小
 							(void *        ) NULL,            //传递给任务函数的参数
-							(UBaseType_t   ) HigTask_TASK_PRIO, //任务优先级
-							(TaskHandle_t* ) &HigTaskHanhler//任务句柄
-							);
-	xTaskCreate((TaskFunction_t) MidTask,       //任务函数
-							(const char*   ) "MidTask",     //任务名称
-							(uint16_t      ) MidTask_STK_SIZE,  //任务堆栈大小
-							(void *        ) NULL,            //传递给任务函数的参数
-							(UBaseType_t   ) MidTask_TASK_PRIO, //任务优先级
-							(TaskHandle_t* ) &MidTaskHanhler//任务句柄
-							);
-	xTaskCreate((TaskFunction_t) LowTask,       //任务函数
-							(const char*   ) "LowTask",     //任务名称
-							(uint16_t      ) LowTask_STK_SIZE,  //任务堆栈大小
-							(void *        ) NULL,            //传递给任务函数的参数
-							(UBaseType_t   ) LowTask_TASK_PRIO, //任务优先级
-							(TaskHandle_t* ) &LowTaskHanhler//任务句柄
+							(UBaseType_t   ) TimerControlTask_TASK_PRIO, //任务优先级
+							(TaskHandle_t* ) &TimerControlTaskHanhler//任务句柄
 							);
 		//删除开始任务
 		vTaskDelete(StartTaskHanhler);
@@ -102,51 +83,41 @@ void StartTask(void * pvParameter)
 	  taskEXIT_CRITICAL();      //退出临界区
 }
 
-void HigTask(void *pArg)
+void TimerControlTask(void *pArg)
 {
-	u8 num;
-	
-	while(1)
-	{
-		vTaskDelay(500);    //延时500ms
-		num++;
-		printf("high task Pend Sem\r\n");
-		xSemaphoreTake(BinarySemaphore,portMAX_DELAY); //获取二值信号量
-		printf("High Task Running\r\n");
-		xSemaphoreGive(BinarySemaphore);
-    vTaskDelay(500);		
-	}
-}
-
-void MidTask(void *pArg)
-{
-	u8 num=0;
-	while(1)
-	{
-		num++;
-		printf("middle task Running\r\n");
-		LED0 = !LED0;
-		vTaskDelay(1000);
-	}
-}
-
-void LowTask(void *pArg)
-{
-	static u32 times = 0;
-	while(1)
-	{
-		xSemaphoreTake(BinarySemaphore,portMAX_DELAY);
-		printf("Low Task Runnning");
-		for(times=0;times<20000000;times++)  //模拟低优先级任务占用二值信号量
+	  u8 key, num;
+	  while(1)
 		{
-			taskYIELD();  //发起任务调度
+			//只有两个定时器都创建成功了才能对其进行操作
+			if((AutoReloadTimerHandle!=NULL)&&(OneShotTimerHandle!=NULL))
+			{
+				key = KEY_Scan(0);
+				switch(key)
+				{
+					case KEY0_PRES:
+						xTimerStart(AutoReloadTimerHandle,0);
+					  printf("Start peri Timer\r\n");
+					  break;
+					case KEY1_PRES:
+						xTimerStart(OneShotTimerHandle,0);
+					  printf("Start one Timer\r\n");
+					  break;
+					case KEY2_PRES:
+						xTimerStop(AutoReloadTimerHandle,0);
+					  xTimerStop(OneShotTimerHandle,0);
+					  printf("Stop All timers\r\n");
+					  break;
+				}
+			}
+			num++;
+			if(num==50) 
+			{
+				num = 0;
+				LED0 = !LED0;
+			}
+			vTaskDelay(10);
 		}
-		xSemaphoreGive(BinarySemaphore);
-		vTaskDelay(1000);
-	}
-	
 }
-
 void USART1_IRQHandler(void)                	 
 {
 	u8 Res;
@@ -174,13 +145,26 @@ void USART1_IRQHandler(void)
 				}
 			}   		 
      } 
-		//就向队列发送接收到的数据
-		if((USART_RX_STA&0x80)&&(BinarySemaphore!=NULL))
-		{
-			//向队列中发送数据
-	    xSemaphoreGiveFromISR(BinarySemaphore,&xHighPriorityTaskWoken);
-			portYIELD_FROM_ISR(xHighPriorityTaskWoken);
-		}
+//		//就向队列发送接收到的数据
+//		if((USART_RX_STA&0x80)&&(BinarySemaphore!=NULL))
+//		{
+//			//向队列中发送数据
+//	    xSemaphoreGiveFromISR(BinarySemaphore,&xHighPriorityTaskWoken);
+//			portYIELD_FROM_ISR(xHighPriorityTaskWoken);
+//		}
 } 
 
+void AutoReloadCallback(TimerHandle_t xTimer)
+{
+	static u8 timer1Num = 0;
+	timer1Num ++;
+	printf("Timer peri run %d times\r\n",timer1Num);
+}
 
+void OneShotCallback(TimerHandle_t xTimer)
+{
+	static u8 timer2Num = 0;
+	timer2Num ++;
+	LED1 = !LED1;
+	printf("Timer once stops in %d times\r\n",timer2Num);
+}
