@@ -3,7 +3,7 @@
  * Auto generated Run-Time-Environment Component Configuration File
  *      *** Do not modify ! ***
  *
- * Project: 'semaphore priority' 
+ * Project: 'soft timer' 
  * Target:  'Target 1' 
  */
 
