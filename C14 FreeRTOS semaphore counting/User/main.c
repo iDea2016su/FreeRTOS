@@ -100,6 +100,7 @@ void SemaphoreGiveTask(void *pArg)
 						{
 							printf("Give Semaphore failed\r\n");
 						}
+						printf("Key scan successful\r\n");
 						//获取计数型信号量值
 						semavalue = uxSemaphoreGetCount(CountSemaphore);
 						break;
@@ -159,10 +160,10 @@ void USART1_IRQHandler(void)
 			}   		 
      } 
 		//就向队列发送接收到的数据
-		if((USART_RX_STA&0x80)&&(BinarySemaphore!=NULL))
+		if((USART_RX_STA&0x80)&&(CountSemaphore!=NULL))
 		{
 			//向队列中发送数据
-	    xSemaphoreGiveFromISR(BinarySemaphore,&xHighPriorityTaskWoken);
+	    xSemaphoreGiveFromISR(CountSemaphore,&xHighPriorityTaskWoken);
 			portYIELD_FROM_ISR(xHighPriorityTaskWoken);
 		}
 } 
